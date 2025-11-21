@@ -5,101 +5,91 @@ const io = require("socket.io")(http);
 const fs = require("fs");
 const path = require("path");
 
-// public klasörünü statik yap
 app.use(express.static("public"));
 
-// channel.json dosyasını oku
 const channelsPath = path.join(__dirname, "channel.json");
-const rawData = fs.readFileSync(channelsPath);
-const channels = JSON.parse(rawData).channels;
+const channels = JSON.parse(fs.readFileSync(channelsPath)).channels;
 
-// Kanalları frontend'e JSON olarak gönder
-app.get("/channels", (req, res) => {
-    res.json(channels);
-});
+app.get("/channels", (req, res) => res.json(channels));
+app.get("/users", (req, res) => res.json(Object.keys(users)));
 
-// Kullanıcı listesi route'u (frontend için)
-app.get("/users", (req, res) => {
-    res.json(Object.keys(users));
-});
-
-// Kanal bazlı mesaj hafızası
-const messages = {}; // { channelId: [ { text, user, time } ] }
-// DM / Grup DM hafızası
-const dms = {}; // { key: [ { text, from, time, users } ] }
-
-// Kullanıcı listesi (username -> socket.id)
+const messages = {};
+const dms = {};
 const users = {};
-
-// Sesli sohbet kullanıcıları (username -> socket.id)
 const voiceUsers = {};
 
 io.on("connection", (socket) => {
-    console.log("Bir kullanıcı bağlandı.");
+    console.log("Yeni bağlantı:", socket.id);
 
-    // Kullanıcı adını kaydet
     socket.on("register", (username) => {
         socket.username = username;
         users[username] = socket.id;
-        console.log(`Kullanıcı adı set edildi: ${username}`);
+        console.log(`${username} giriş yaptı`);
     });
 
-    // Kanal mesajlarını gönder
     socket.on("joinChannel", (channelId) => {
-        if(messages[channelId]){
+        if (messages[channelId]) {
             messages[channelId].forEach(msg => socket.emit("message", msg));
         }
     });
 
-    // Mesaj gönderme
     socket.on("message", (msg) => {
-        if(msg.dmUser){
-            // DM mesajı: sadece gönderen ve alıcı görür
-            const toSocketId = users[msg.dmUser];
-            const fromSocketId = socket.id;
+        if (msg.dmUser && msg.dmUser.trim()) {
+            const toId = users[msg.dmUser];
+            if (toId) io.to(toId).emit("message", msg);
+            io.to(socket.id).emit("message", msg);
+            return;
+        }
 
-            if(toSocketId) io.to(toSocketId).emit("message", msg);
-            io.to(fromSocketId).emit("message", msg); // gönderen görsün
-        } else if(msg.groupUsers){
-            // Grup DM mesajı
-            const key = msg.groupUsers.sort().join("-");
-            if(!dms[key]) dms[key] = [];
+        if (Array.isArray(msg.groupUsers) && msg.groupUsers.length > 0) {
+            const key = [...msg.groupUsers, msg.user].sort().join("-");
+            if (!dms[key]) dms[key] = [];
             dms[key].push(msg);
-
-            msg.groupUsers.forEach(u => {
-                const userSocketId = users[u];
-                if(userSocketId) io.to(userSocketId).emit("message", msg);
+            [...msg.groupUsers, msg.user].forEach(u => {
+                const sid = users[u];
+                if (sid) io.to(sid).emit("message", msg);
             });
-        } else {
-            // Kanal mesajı: tüm kullanıcılar görür
-            if(!messages[msg.channel]) messages[msg.channel] = [];
+            return;
+        }
+
+        if (msg.channel) {
+            if (!messages[msg.channel]) messages[msg.channel] = [];
             messages[msg.channel].push(msg);
             io.emit("message", msg);
         }
     });
 
-    // SESLİ SOHBET (WebRTC) EVENTLERİ
     socket.on("voice-join", ({ username }) => {
         voiceUsers[username] = socket.id;
+        console.log(`${username} sesliye katıldı`);
+        socket.emit("voice-users", Object.keys(voiceUsers).filter(u => u !== username));
+        socket.broadcast.emit("voice-new-user", username);
     });
 
     socket.on("voice-signal", ({ to, from, signal }) => {
-        const toSocket = voiceUsers[to];
-        if(toSocket){
-            io.to(toSocket).emit("voice-signal", { from, signal });
+        const toSocketId = voiceUsers[to];
+        if (toSocketId) {
+            io.to(toSocketId).emit("voice-signal", { from, signal });
         }
     });
 
-    // Kullanıcı ayrılınca listeden sil
+    socket.on("voice-leave", () => {
+        if (socket.username) {
+            delete voiceUsers[socket.username];
+            socket.broadcast.emit("voice-user-left", socket.username);
+        }
+    });
+
     socket.on("disconnect", () => {
-        if(socket.username) {
+        if (socket.username) {
             delete users[socket.username];
             delete voiceUsers[socket.username];
+            socket.broadcast.emit("voice-user-left", socket.username);
+            console.log(`${socket.username} ayrıldı`);
         }
-        console.log(`${socket.username || "Anonim"} ayrıldı`);
     });
 });
 
 http.listen(3000, () => {
-    console.log("Sunucu çalışıyor: http://localhost:3000");
+    console.log("Sunucu çalışıyor → http://localhost:3000");
 });
