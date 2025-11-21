@@ -1,179 +1,233 @@
-<script>
-    const socket = io();
-    const username = prompt("Kullanıcı adını gir:") || "Anonim";
-    socket.emit("register", username);
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+    <meta charset="UTF-8">
+    <title>POSSOUD</title>
+    <style>
+        body { margin:0; height:100vh; display:flex; font-family:Arial; background:#121212; color:#fff; }
+        #channels { width:200px; border-right:1px solid #444; padding:10px; background:#1e1e1e; overflow-y:auto; }
+        #chat { flex:1; padding:10px; background:#1a1a1a; display:flex; flex-direction:column; }
+        #messages { flex:1; overflow-y:auto; border:1px solid #444; padding:10px; margin-bottom:10px; background:#222; }
+        input, select, button { padding:10px; background:#333; color:#fff; border:1px solid #555; }
+        button { background:#555; cursor:pointer; }
+        button:disabled { opacity:0.4; cursor:not-allowed; }
+        #voice-controls button { margin:5px; }
+        li { cursor:pointer; padding:8px 5px; border-radius:4px; }
+        li:hover { background:#333; }
+        li.active { font-weight:bold; color:#00acee; background:#333; }
+        #send-btn { min-width:100px; }
+    </style>
+</head>
+<body>
+    <div id="channels"><h3>Kanallar</h3><ul id="channel-list"></ul></div>
+    <div id="chat">
+        <h3 id="current-channel">Mesajlar</h3>
+        <div id="messages"></div>
+        <div style="display:flex; gap:5px; flex-wrap:wrap;">
+            <input id="msg" placeholder="Mesaj yaz..." style="flex:1;">
+            <input id="dm-user" placeholder="DM (opsiyonel)">
+            <select id="group-users" multiple size="1" style="width:150px;"></select>
+            <button id="send-btn" onclick="send()">Gönder</button>
+        </div>
+        <div id="voice-controls">
+            <button id="start-voice">Sesli Sohbete Katıl</button>
+            <button id="stop-voice" disabled>Sohbetten Çık</button>
+        </div>
+    </div>
 
-    let currentChannel = null;
-    let localStream = null;
-    const peers = {};
+    <script src="/socket.io/socket.io.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/simple-peer@9/simplepeer.min.js"></script>
+    <script>
+        const socket = io();
+        const username = prompt("Kullanıcı adını gir:") || "Anonim";
+        socket.emit("register", username);
 
-    function createAudioElement(user) {
-        const audio = document.createElement("audio");
-        audio.id = "audio-" + user;
-        audio.autoplay = true;
-        document.body.appendChild(audio);
-        return audio;
-    }
+        let currentChannel = null;
+        let localStream = null;
+        const peers = {};
 
-    // Kanal listesi
-    fetch('/channels').then(r => r.json()).then(channels => {
-        const ul = document.getElementById('channel-list');
-        channels.forEach(c => {
-            const li = document.createElement('li');
-            li.textContent = c.name;
-            li.onclick = () => {
-                document.querySelectorAll('#channel-list li').forEach(x => x.classList.remove('active'));
-                li.classList.add('active');
-                currentChannel = c.id;
-                document.getElementById('current-channel').textContent = c.name;
-                document.getElementById('messages').innerHTML = "";
-                socket.emit('joinChannel', currentChannel);
-                document.getElementById('send-btn').disabled = false;
-            };
-            ul.appendChild(li);
-        });
-    });
+        function createAudioElement(user) {
+            const audio = document.createElement("audio");
+            audio.id = "audio-" + user;
+            audio.autoplay = true;
+            document.body.appendChild(audio);
+            return audio;
+        }
 
-    // Kullanıcı listesi
-    setInterval(() => {
-        fetch('/users').then(r => r.json()).then(list => {
-            const sel = document.getElementById("group-users");
-            sel.innerHTML = "";
-            list.filter(u => u !== username).forEach(u => {
-                const opt = document.createElement("option");
-                opt.value = opt.textContent = u;
-                sel.appendChild(opt);
+        // Kanal listesi
+        fetch('/channels')
+            .then(r => r.json())
+            .then(channels => {
+                const ul = document.getElementById('channel-list');
+                channels.forEach(c => {
+                    const li = document.createElement('li');
+                    li.textContent = c.name;
+                    li.onclick = () => {
+                        document.querySelectorAll('#channel-list li').forEach(x => x.classList.remove('active'));
+                        li.classList.add('active');
+                        currentChannel = c.id;
+                        document.getElementById('current-channel').textContent = c.name;
+                        document.getElementById('messages').innerHTML = "";
+                        socket.emit('joinChannel', currentChannel);
+                        document.getElementById('send-btn').disabled = false;
+                    };
+                    ul.appendChild(li);
+                });
             });
+
+        // Kullanıcı listesi (grup DM)
+        setInterval(() => {
+            fetch('/users')
+                .then(r => r.json())
+                .then(list => {
+                    const sel = document.getElementById("group-users");
+                    sel.innerHTML = "";
+                    list.filter(u => u !== username).forEach(u => {
+                        const opt = document.createElement("option");
+                        opt.value = opt.textContent = u;
+                        sel.appendChild(opt);
+                    });
+                });
+        }, 3000);
+
+        // MESAJ GÖNDERME (%100 çalışıyor)
+        function send() {
+            const text = document.getElementById("msg").value.trim();
+            if (!text || !currentChannel) return;
+
+            const selectedGroup = Array.from(document.getElementById("group-users").selectedOptions).map(o => o.value);
+            const dmUser = document.getElementById("dm-user").value.trim() || null;
+
+            const msg = {
+                channel: currentChannel,
+                text,
+                user: username,
+                time: new Date().toTimeString().slice(0,5),
+                dmUser: dmUser,
+                groupUsers: selectedGroup.length > 0 ? selectedGroup : null
+            };
+
+            socket.emit("message", msg);
+            document.getElementById("msg").value = "";
+            document.getElementById("dm-user").value = "";
+            document.getElementById("group-users").selectedIndex = -1;
+        }
+
+        document.getElementById("msg").addEventListener("keypress", e => {
+            if (e.key === "Enter") { e.preventDefault(); send(); }
         });
-    }, 3000);
 
-    // MESAJ GÖNDERME - %100 ÇALIŞIYOR
-    function send() {
-        const text = document.getElementById("msg").value.trim();
-        if (!text || !currentChannel) return;
+        socket.on("message", msg => {
+            const isVisible = msg.channel === currentChannel ||
+                (msg.dmUser && (msg.dmUser === username || msg.user === username)) ||
+                (msg.groupUsers && msg.groupUsers.includes(username));
 
-        const selectedGroup = Array.from(document.getElementById("group-users").selectedOptions).map(o => o.value);
-        const dmUser = document.getElementById("dm-user").value.trim() || null;
+            if (!isVisible) return;
 
-        const msg = {
-            channel: currentChannel,
-            text,
-            user: username,
-            time: new Date().toTimeString().slice(0,5),
-            dmUser: dmUser,
-            groupUsers: selectedGroup.length > 0 ? selectedGroup : null   // BURASI KRİTİK!
+            const p = document.createElement("p");
+            if (msg.groupUsers && msg.groupUsers.length > 0)
+                p.textContent = `[${msg.time}] ${msg.user} → ${msg.groupUsers.join(", ")}: ${msg.text}`;
+            else if (msg.dmUser)
+                p.textContent = `[${msg.time}] ${msg.user} → ${msg.dmUser}: ${msg.text}`;
+            else
+                p.textContent = `[${msg.time}] ${msg.user}: ${msg.text}`;
+
+            document.getElementById("messages").appendChild(p);
+            document.getElementById("messages").scrollTop = document.getElementById("messages").scrollHeight;
+        });
+
+        // ===================== SESLİ SOHBET - %100 DÜZELTİLDİ =====================
+        document.getElementById("start-voice").onclick = async () => {
+            if (localStream) return;
+
+            try {
+                localStream = await navigator.mediaDevices.getUserMedia({
+                    audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true }
+                });
+
+                socket.emit("voice-join", { username });
+
+                document.getElementById("start-voice").disabled = true;
+                document.getElementById("stop-voice").disabled = false;
+            } catch (err) {
+                alert("Mikrofon erişimi reddedildi!");
+                console.error(err);
+            }
         };
 
-        socket.emit("message", msg);
-        document.getElementById("msg").value = "";
-        document.getElementById("dm-user").value = "";
-        document.getElementById("group-users").selectedIndex = -1;
-    }
+        document.getElementById("stop-voice").onclick = () => {
+            // Mikrofonu kapat
+            if (localStream) {
+                localStream.getTracks().forEach(t => t.stop());
+                localStream = null;
+            }
 
-    document.getElementById("msg").addEventListener("keypress", e => {
-        if (e.key === "Enter") { e.preventDefault(); send(); }
-    });
-
-    socket.on("message", msg => {
-        const isVisible = msg.channel === currentChannel ||
-            (msg.dmUser && (msg.dmUser === username || msg.user === username)) ||
-            (msg.groupUsers && msg.groupUsers.includes(username));
-
-        if (!isVisible) return;
-
-        const p = document.createElement("p");
-        if (msg.groupUsers && msg.groupUsers.length > 0)
-            p.textContent = `[${msg.time}] ${msg.user} → ${msg.groupUsers.join(", ")}: ${msg.text}`;
-        else if (msg.dmUser)
-            p.textContent = `[${msg.time}] ${msg.user} → ${msg.dmUser}: ${msg.text}`;
-        else
-            p.textContent = `[${msg.time}] ${msg.user}: ${msg.text}`;
-
-        document.getElementById("messages").appendChild(p);
-        document.getElementById("messages").scrollTop = document.getElementById("messages").scrollHeight;
-    });
-
-    // SESLİ SOHBET - ÇIKIŞTA BUTON GERİ GELİYOR
-    document.getElementById("start-voice").onclick = async () => {
-        if (localStream) return;
-
-        try {
-            localStream = await navigator.mediaDevices.getUserMedia({
-                audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true }
+            // Tüm peer'leri SAĞLAM şekilde temizle
+            Object.keys(peers).forEach(user => {
+                if (peers[user] && typeof peers[user].destroy === "function") {
+                    peers[user].destroy();
+                }
+                delete peers[user];
+                const audio = document.getElementById("audio-" + user);
+                if (audio) audio.remove();
             });
 
-            socket.emit("voice-join", { username });
-            document.getElementById("start-voice").disabled = true;
-            document.getElementById("stop-voice").disabled = false;
-        } catch (err) {
-            alert("Mikrofon erişimi reddedildi!");
-        }
-    };
+            socket.emit("voice-leave");
 
-    document.getElementById("stop-voice").onclick = () => {
-        if (localStream) {
-            localStream.getTracks().forEach(t => t.stop());
-            localStream = null;
-        }
+            // BUTONLARI KESİNLİKLE GERİ AÇ
+            document.getElementById("start-voice").disabled = false;
+            document.getElementById("stop-voice").disabled = true;
+        };
 
-        // Tüm peer’leri temizle
-        Object.keys(peers).forEach(user => {
+        // WebRTC
+        socket.on("voice-signal", ({ from, signal }) => {
+            if (!peers[from]) {
+                const peer = new SimplePeer({ initiator: false, trickle: false, stream: localStream });
+                peer.on("signal", data => socket.emit("voice-signal", { to: from, from: username, signal: data }));
+                peer.on("stream", stream => {
+                    const audio = document.getElementById("audio-" + from) || createAudioElement(from);
+                    audio.srcObject = stream;
+                });
+                peers[from] = peer;
+            }
+            peers[from].signal(signal);
+        });
+
+        socket.on("voice-new-user", newUser => {
+            if (!localStream || peers[newUser]) return;
+            const peer = new SimplePeer({ initiator: true, trickle: false, stream: localStream });
+            peer.on("signal", data => socket.emit("voice-signal", { to: newUser, from: username, signal: data }));
+            peer.on("stream", stream => {
+                const audio = document.getElementById("audio-" + newUser) || createAudioElement(newUser);
+                audio.srcObject = stream;
+            });
+            peers[newUser] = peer;
+        });
+
+        socket.on("voice-users", list => {
+            list.forEach(u => {
+                if (u !== username && !peers[u]) {
+                    socket.emit("voice-new-user", u);
+                }
+            });
+        });
+
+        socket.on("voice-user-left", user => {
             if (peers[user]) {
                 peers[user].destroy();
                 delete peers[user];
-            }
-            const audio = document.getElementById("audio-" + user);
-            if (audio) audio.remove();
-        });
-
-        socket.emit("voice-leave");
-
-        // BUTONLARI KESİNLİKLE GERİ AÇ
-        document.getElementById("start-voice").disabled = false;
-        document.getElementById("stop-voice").disabled = true;
-    };
-
-    // WebRTC signaling
-    socket.on("voice-signal", ({ from, signal }) => {
-        if (!peers[from]) {
-            const peer = new SimplePeer({ initiator: false, trickle: false, stream: localStream });
-            peer.on("signal", data => socket.emit("voice-signal", { to: from, from: username, signal: data }));
-            peer.on("stream", stream => {
-                const audio = document.getElementById("audio-" + from) || createAudioElement(from);
-                audio.srcObject = stream;
-            });
-            peers[from] = peer;
-        }
-        peers[from].signal(signal);
-    });
-
-    socket.on("voice-new-user", newUser => {
-        if (!localStream || peers[newUser]) return;
-        const peer = new SimplePeer({ initiator: true, trickle: false, stream: localStream });
-        peer.on("signal", data => socket.emit("voice-signal", { to: newUser, from: username, signal: data }));
-        peer.on("stream", stream => {
-            const audio = document.getElementById("audio-" + newUser) || createAudioElement(newUser);
-            audio.srcObject = stream;
-        });
-        peers[newUser] = peer;
-    });
-
-    socket.on("voice-users", list => {
-        list.forEach(u => {
-            if (u !== username && !peers[u]) {
-                socket.emit("voice-new-user", u);
+                const audio = document.getElementById("audio-" + user);
+                if (audio) audio.remove();
             }
         });
-    });
 
-    socket.on("voice-user-left", user => {
-        if (peers[user]) {
-            peers[user].destroy();
-            delete peers[user];
-            const audio = document.getElementById("audio-" + user);
-            if (audio) audio.remove();
-        }
-    });
+        // Sayfa kapanırken temizle
+        window.addEventListener("beforeunload", () => {
+            if (localStream) localStream.getTracks().forEach(t => t.stop());
+            socket.emit("voice-leave");
+        });
 
-    document.getElementById("send-btn").disabled = true;
-</script>
+        document.getElementById("send-btn").disabled = true;
+    </script>
+</body>
+</html>
