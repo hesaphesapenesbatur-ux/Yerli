@@ -2,36 +2,155 @@
 <html lang="tr">
 <head>
     <meta charset="UTF-8">
-    <title>Chat</title>
+    <title>POSSOUD</title>
     <style>
-        #messages { height: 300px; overflow-y: scroll; border: 1px solid #ccc; padding: 10px; }
-        input { width: 80%; padding: 10px; }
-        button { padding: 10px; }
+        body { 
+            display: flex; 
+            font-family: Arial; 
+            background-color: #121212; 
+            color: #fff; 
+            margin: 0;
+            height: 100vh;
+        }
+
+        #channels { 
+            width: 200px; 
+            border-right: 1px solid #444; 
+            padding: 10px; 
+            background-color: #1e1e1e;
+        }
+
+        #chat { 
+            flex: 1; 
+            padding: 10px; 
+            background-color: #1a1a1a;
+            display: flex;
+            flex-direction: column;
+        }
+
+        #messages { 
+            flex: 1;
+            overflow-y: auto; 
+            border: 1px solid #444; 
+            padding: 10px; 
+            margin-bottom: 10px; 
+            background-color: #222;
+        }
+
+        input { 
+            padding: 10px; 
+            border: 1px solid #555; 
+            background-color: #333; 
+            color: #fff; 
+        }
+
+        #msg { width: 60%; }
+        #dm-user { width: 20%; }
+
+        button { 
+            padding: 10px; 
+            background-color: #555; 
+            color: #fff; 
+            border: none; 
+            cursor: pointer;
+        }
+
+        li { 
+            cursor: pointer; 
+            margin-bottom: 5px; 
+            color: #ccc;
+        }
+
+        li:hover { color: #fff; }
+        li.active { font-weight: bold; color: #00acee; }
     </style>
 </head>
 <body>
-    <h2>POSSOUD</h2>
-    <div id="messages"></div>
-    <input id="msg" placeholder="Mesaj yaz...">
-    <button onclick="send()">Gönder</button>
+    <div id="channels">
+        <h3>Kanallar</h3>
+        <ul id="channel-list"></ul>
+    </div>
+
+    <div id="chat">
+        <h3 id="current-channel">Mesajlar</h3>
+        <div id="messages"></div>
+        <div style="display:flex; gap:5px;">
+            <input id="msg" placeholder="Mesaj yaz...">
+            <input id="dm-user" placeholder="DM kullanıcı (opsiyonel)">
+            <button onclick="send()">Gönder</button>
+        </div>
+    </div>
 
     <script src="/socket.io/socket.io.js"></script>
     <script>
         const socket = io();
+        let currentChannel = null;
 
-        socket.on("message", (msg) => {
-            const div = document.getElementById("messages");
-            div.innerHTML += "<p>" + msg + "</p>";
-            div.scrollTop = div.scrollHeight;
-        });
+        // Kullanıcı adı al
+        let username = prompt("Kullanıcı adını gir:");
+        if(!username) username = "Anonim";
+        socket.emit("register", username);
 
+        // Kanalları çek ve listele
+        fetch('/channels')
+            .then(res => res.json())
+            .then(channels => {
+                const ul = document.getElementById('channel-list');
+                channels.forEach(c => {
+                    const li = document.createElement('li');
+                    li.textContent = c.name;
+
+                    li.onclick = () => {
+                        document.querySelectorAll('#channel-list li').forEach(l => l.classList.remove('active'));
+                        li.classList.add('active');
+                        currentChannel = c.id;
+                        document.getElementById('current-channel').textContent = c.name;
+                        document.getElementById('messages').innerHTML = "";
+                        socket.emit('joinChannel', currentChannel);
+                    };
+                    ul.appendChild(li);
+                });
+            });
+
+        // Mesaj gönder
         function send() {
             const text = document.getElementById("msg").value;
-            if(text.trim() !== ""){
-                socket.emit("message", text);
+            const dmUser = document.getElementById("dm-user").value.trim();
+            if(text.trim() !== "" && currentChannel){
+                const now = new Date();
+                const time = now.getHours().toString().padStart(2,'0') + ":" + now.getMinutes().toString().padStart(2,'0');
+
+                socket.emit("message", { 
+                    channel: currentChannel, 
+                    text: text, 
+                    user: username, 
+                    time: time,
+                    dmUser: dmUser ? dmUser : null
+                });
                 document.getElementById("msg").value = "";
             }
         }
+
+        // Enter ile mesaj gönderme
+        document.getElementById("msg").addEventListener("keypress", (e) => {
+            if(e.key === "Enter") { e.preventDefault(); send(); }
+        });
+
+        // Mesajları dinle
+        socket.on("message", (msg) => {
+            // DM mesajıysa ve hedef kullanıcı bizsek veya kanal mesajıysa
+            if(msg.channel === currentChannel || (msg.dmUser && msg.dmUser === username) || (msg.dmUser && msg.user === username)){
+                const div = document.getElementById("messages");
+                const p = document.createElement('p');
+                if(msg.dmUser){
+                    p.textContent = `[${msg.time}] ${msg.user} ➤ ${msg.dmUser}: ${msg.text}`;
+                } else {
+                    p.textContent = `[${msg.time}] ${msg.user}: ${msg.text}`;
+                }
+                div.appendChild(p);
+                div.scrollTop = div.scrollHeight;
+            }
+        });
     </script>
 </body>
 </html>

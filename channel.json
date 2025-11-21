@@ -1,0 +1,7 @@
+{
+  "channels": [
+    { "id": 1, "name": "genel" },
+    { "id": 2, "name": "sohbet" },
+    { "id": 3, "name": "oyun" }
+  ]
+}
