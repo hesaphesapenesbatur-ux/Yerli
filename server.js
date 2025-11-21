@@ -7,8 +7,27 @@ const path = require("path");
 
 app.use(express.static("public"));
 
+// channel.json yoksa bile çökmesin → varsayılan kanallar olsun
+let channels = [
+    { id: "genel", name: "Genel" },
+    { id: "random", name: "Random" },
+    { id: "oyun", name: "Oyun" }
+];
+
 const channelsPath = path.join(__dirname, "channel.json");
-const channels = JSON.parse(fs.readFileSync(channelsPath)).channels;
+if (fs.existsSync(channelsPath)) {
+    try {
+        const raw = fs.readFileSync(channelsPath, "utf-8");
+        const data = JSON.parse(raw);
+        if (data && Array.isArray(data.channels)) {
+            channels = data.channels;
+        }
+    } catch (err) {
+        console.log("channel.json bozuk, varsayılan kanallar kullanılıyor");
+    }
+} else {
+    console.log("channel.json bulunamadı, varsayılan kanallar kullanılıyor");
+}
 
 app.get("/channels", (req, res) => res.json(channels));
 app.get("/users", (req, res) => res.json(Object.keys(users)));
@@ -16,7 +35,7 @@ app.get("/users", (req, res) => res.json(Object.keys(users)));
 const messages = {};
 const dms = {};
 const users = {};        // username → socket.id
-const voiceUsers = {};   // username → socket.id (sesli odadakiler)
+const voiceUsers = {};   // sesli odadakiler
 
 io.on("connection", (socket) => {
     console.log("Yeni bağlantı:", socket.id);
@@ -33,7 +52,7 @@ io.on("connection", (socket) => {
         }
     });
 
-    // MESAJ SİSTEMİ - %100 ÇALIŞIYOR
+    // MESAJ SİSTEMİ
     socket.on("message", (msg) => {
         // DM
         if (msg.dmUser && msg.dmUser.trim()) {
@@ -45,12 +64,10 @@ io.on("connection", (socket) => {
 
         // Grup DM
         if (Array.isArray(msg.groupUsers) && msg.groupUsers.length > 0) {
-            const participants = [...msg.groupUsers];
-            if (msg.user && !participants.includes(msg.user)) participants.push(msg.user);
+            const participants = [...new Set([...msg.groupUsers, msg.user].filter(Boolean))];
             const key = participants.sort().join("-");
             if (!dms[key]) dms[key] = [];
             dms[key].push(msg);
-
             participants.forEach(u => {
                 const sid = users[u];
                 if (sid) io.to(sid).emit("message", msg);
@@ -62,52 +79,42 @@ io.on("connection", (socket) => {
         if (msg.channel) {
             if (!messages[msg.channel]) messages[msg.channel] = [];
             messages[msg.channel].push(msg);
-            io.emit("message", msg); // herkese gönder
+            io.emit("message", msg);
         }
     });
 
-    // SESLİ SOHBET - GİRİŞ
+    // SESLİ SOHBET
     socket.on("voice-join", ({ username }) => {
-        if (!username || voiceUsers[username]) return; // tekrar giriş engelle
+        if (!username || voiceUsers[username]) return;
 
         voiceUsers[username] = socket.id;
         console.log(`${username} sesliye katıldı`);
 
-        // Bu kullanıcıya şu an kimler var söyle
-        const currentVoiceUsers = Object.keys(voiceUsers).filter(u => u !== username);
-        socket.emit("voice-users", currentVoiceUsers);
-
-        // Diğerlerine "yeni biri geldi" diye haber ver
+        const others = Object.keys(voiceUsers).filter(u => u !== username);
+        socket.emit("voice-users", others);
         socket.broadcast.emit("voice-new-user", username);
     });
 
-    // SIGNALİNG
     socket.on("voice-signal", ({ to, from, signal }) => {
-        const toSocketId = voiceUsers[to];
-        if (toSocketId) {
-            io.to(toSocketId).emit("voice-signal", { from, signal });
+        const target = voiceUsers[to];
+        if (target) {
+            io.to(target).emit("voice-signal", { from, signal });
         }
     });
 
-    // SESLİDEN ÇIKIŞ (manuel)
     socket.on("voice-leave", () => {
         if (!socket.username) return;
-
         delete voiceUsers[socket.username];
         socket.broadcast.emit("voice-user-left", socket.username);
         console.log(`${socket.username} sesli odadan ayrıldı`);
     });
 
-    // KULLANICI AYRILDI (disconnect)
     socket.on("disconnect", () => {
         if (!socket.username) return;
 
         console.log(`${socket.username} ayrıldı`);
-
-        // Normal listeden sil
         delete users[socket.username];
 
-        // Sesli odadan da sil ve herkese haber ver
         if (voiceUsers[socket.username]) {
             delete voiceUsers[socket.username];
             socket.broadcast.emit("voice-user-left", socket.username);
@@ -117,4 +124,5 @@ io.on("connection", (socket) => {
 
 http.listen(3000, () => {
     console.log("Sunucu çalışıyor → http://localhost:3000");
+    console.log("Kanallar:", channels.map(c => c.name).join(", "));
 });
