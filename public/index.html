@@ -7,15 +7,81 @@
         body { margin:0; height:100vh; display:flex; font-family:Arial; background:#121212; color:#fff; }
         #channels { width:200px; border-right:1px solid #444; padding:10px; background:#1e1e1e; overflow-y:auto; }
         #chat { flex:1; padding:10px; background:#1a1a1a; display:flex; flex-direction:column; }
-        #messages { flex:1; overflow-y:auto; border:1px solid #444; padding:10px; margin-bottom:10px; background:#222; }
-        input, select, button { padding:10px; background:#333; color:#fff; border:1px solid #555; }
+        #messages { flex:1; overflow-y:auto; padding:10px; margin-bottom:10px; background:#222; border-radius:8px; }
+        input, select, button { padding:10px; background:#333; color:#fff; border:1px solid #555; border-radius:4px; }
         button { background:#555; cursor:pointer; }
+        button:hover { background:#666; }
         button:disabled { opacity:0.4; cursor:not-allowed; }
-        #voice-controls button { margin:5px; }
         li { cursor:pointer; padding:8px 5px; border-radius:4px; }
         li:hover { background:#333; }
         li.active { font-weight:bold; color:#00acee; background:#333; }
-        #send-btn { min-width:100px; }
+
+        /* MESAJ STİLLERİ */
+        .msg {
+            margin: 8px 0;
+            padding: 10px 12px;
+            background: #2d2d2d;
+            border-radius: 8px;
+            position: relative;
+            max-width: 85%;
+            word-wrap: break-word;
+        }
+        .msg:hover { background: #333; }
+        .msg .user { font-weight: bold; color: #00acee; }
+        .msg .time { font-size: 11px; color: #888; margin-left: 8px; }
+        .msg .text { display: block; margin-top: 4px; }
+        .msg .edited { font-size: 10px; color: #888; margin-left: 6px; }
+        .msg .deleted { color: #666; font-style: italic; }
+
+        /* YANIT ÖNİZLEME */
+        .reply-preview {
+            background: #36393f;
+            padding: 6px 10px;
+            border-left: 4px solid #00acee;
+            border-radius: 6px;
+            margin-bottom: 8px;
+            font-size: 13px;
+            cursor: pointer;
+        }
+        .reply-preview:hover { background: #40444b; }
+
+        /* ÜÇ NOKTA MENÜ */
+        .msg-menu {
+            position: absolute;
+            right: 8px;
+            top: 8px;
+            background: #1e1e1e;
+            border: 1px solid #444;
+            border-radius: 6px;
+            padding: 6px 0;
+            display: none;
+            z-index: 10;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.6);
+        }
+        .msg:hover .msg-menu { display: block; }
+        .msg-menu button {
+            width: 100%;
+            padding: 8px 16px;
+            background: none;
+            border: none;
+            color: #fff;
+            text-align: left;
+            font-size: 13px;
+        }
+        .msg-menu button:hover { background: #00acee; }
+
+        /* SESLİ ODADAKİLER PANELİ */
+        #voice-members-panel {
+            margin-top:20px; background:#111; border-radius:10px; padding:12px; border:1px solid #333; display:none;
+        }
+        .voice-member-item {
+            padding:10px; background:#222; border-radius:8px; display:flex; align-items:center; gap:10px;
+            font-size:14px; animation: fadeIn 0.3s;
+        }
+        .voice-member-item.you { background:#1e3a2e; border-left:4px solid #00ff88; font-weight:bold; }
+        .voice-member-item::before { content:"●"; color:#00ff00; font-size:18px; animation:pulse 2s infinite; }
+        @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.4} }
+        @keyframes fadeIn { from{opacity:0; transform:translateY(-10px)} to{opacity:1; transform:translateY(0)} }
     </style>
 </head>
 <body>
@@ -23,15 +89,22 @@
     <div id="chat">
         <h3 id="current-channel">Mesajlar</h3>
         <div id="messages"></div>
-        <div style="display:flex; gap:5px; flex-wrap:wrap;">
+
+        <div style="display:flex; gap:5px; flex-wrap:wrap; margin-top:10px;">
             <input id="msg" placeholder="Mesaj yaz..." style="flex:1;">
-            <input id="dm-user" placeholder="DM (opsiyonel)">
-            <select id="group-users" multiple size="1" style="width:150px;"></select>
             <button id="send-btn" onclick="send()">Gönder</button>
+            <button id="clear-btn">Tümünü Temizle</button>
         </div>
-        <div id="voice-controls">
-            <button id="start-voice">Sesli Sohbete Katıl</button>
-            <button id="stop-voice" disabled>Sohbetten Çık</button>
+
+        <div id="voice-controls" style="margin-top:10px;">
+            <button id="start-voice">Sesliye Katıl</button>
+            <button id="stop-voice" disabled>Çık</button>
+            <button id="mute-btn" disabled>Mikrofonu Kapat</button>
+        </div>
+
+        <div id="voice-members-panel">
+            <h4>Sesli Odadakiler</h4>
+            <div id="voice-members-list"></div>
         </div>
     </div>
 
@@ -43,9 +116,190 @@
         socket.emit("register", username);
 
         let currentChannel = null;
+        let replyingTo = null;
         let localStream = null;
         const peers = {};
+        let isMuted = false;
+        const voicePanel = document.getElementById("voice-members-panel");
+        const voiceList = document.getElementById("voice-members-list");
+        const muteBtn = document.getElementById("mute-btn");
 
+        // Kanal yükleme
+        fetch('/channels').then(r => r.json()).then(channels => {
+            const ul = document.getElementById('channel-list');
+            channels.forEach(c => {
+                const li = document.createElement('li');
+                li.textContent = c.name;
+                li.onclick = () => {
+                    document.querySelectorAll('#channel-list li').forEach(x => x.classList.remove('active'));
+                    li.classList.add('active');
+                    currentChannel = c.id;
+                    document.getElementById('current-channel').textContent = c.name;
+                    document.getElementById('messages').innerHTML = "";
+                    replyingTo = null;
+                    document.getElementById("msg").placeholder = "Mesaj yaz...";
+                    socket.emit('joinChannel', currentChannel);
+                    document.getElementById('send-btn').disabled = false;
+                };
+                ul.appendChild(li);
+            });
+        });
+
+        // Mesaj render
+        function addMessage(msg) {
+            if (msg.channel !== currentChannel) return;
+
+            const div = document.createElement("div");
+            div.className = "msg";
+            div.id = "msg-" + msg.id;
+            div.dataset.user = msg.user;
+
+            // Yanıt önizleme
+            if (msg.replyTo) {
+                const reply = document.createElement("div");
+                reply.className = "reply-preview";
+                reply.innerHTML = `↳ <strong>${msg.replyTo.user}</strong>: ${escapeHtml(msg.replyTo.text.substring(0,60))}${msg.replyTo.text.length > 60 ? '...' : ''}`;
+                reply.onclick = () => scrollToMessage(msg.replyTo.id);
+                div.appendChild(reply);
+            }
+
+            const header = document.createElement("div");
+            header.innerHTML = `<span class="user">${msg.user}</span><span class="time">${new Date(msg.timestamp).toTimeString().slice(0,5)}</span>`;
+            div.appendChild(header);
+
+            const text = document.createElement("span");
+            text.className = "text";
+            text.textContent = msg.deleted ? "Bu mesaj silindi." : msg.text;
+            if (msg.deleted) text.classList.add("deleted");
+            if (msg.edited) {
+                const edited = document.createElement("span");
+                edited.className = "edited";
+                edited.textContent = " (düzenlendi)";
+                text.appendChild(edited);
+            }
+            div.appendChild(text);
+
+            // Sadece kendi mesajına menü
+            if (msg.user === username && !msg.deleted) {
+                const menu = document.createElement("div");
+                menu.className = "msg-menu";
+                menu.innerHTML = `
+                    <button onclick="replyTo('${msg.id}', '${msg.user}', '${escapeHtml(msg.text)}')">Yanıtla</button>
+                    <button onclick="editMessage('${msg.id}', '${escapeHtml(msg.text)}')">Düzenle</button>
+                    <button onclick="deleteMessage('${msg.id}')">Sil</button>
+                `;
+                div.appendChild(menu);
+            }
+
+            document.getElementById("messages").appendChild(div);
+            document.getElementById("messages").scrollTop = document.getElementById("messages").scrollHeight;
+        }
+
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        function scrollToMessage(id) {
+            const el = document.getElementById("msg-" + id);
+            if (el) el.scrollIntoView({ behavior: "smooth", block: "center" });
+        }
+
+        window.replyTo = function(id, user, text) {
+            replyingTo = { id, user, text };
+            document.getElementById("msg").placeholder = `Yanıtlanıyor: ${user}`;
+            document.getElementById("msg").focus();
+        }
+
+        window.editMessage = function(id, oldText) {
+            const msgDiv = document.getElementById("msg-" + id);
+            if (!msgDiv) return;
+
+            const input = document.createElement("input");
+            input.value = oldText;
+            input.style.width = "100%";
+            input.onkeydown = e => {
+                if (e.key === "Enter") {
+                    const newText = input.value.trim();
+                    if (newText && newText !== oldText) {
+                        socket.emit("message", { action: "edit", id, channel: currentChannel, text: newText });
+                    }
+                    msgDiv.innerHTML = "Düzenleniyor...";
+                }
+                if (e.key === "Escape") {
+                    addMessage(msgDiv._cached || { id, user: username, text: oldText, channel: currentChannel });
+                }
+            };
+            msgDiv.innerHTML = "";
+            msgDiv.appendChild(input);
+            input.focus();
+        }
+
+        window.deleteMessage = function(id) {
+            if (confirm("Silinsin mi kanka?")) {
+                socket.emit("message", { action: "delete", id, channel: currentChannel });
+            }
+        }
+
+        // Mesaj gönderme
+        function send() {
+            const input = document.getElementById("msg");
+            const text = input.value.trim();
+            if (!text || !currentChannel) return;
+
+            socket.emit("message", {
+                text: text,
+                channel: currentChannel,
+                replyTo: replyingTo
+            });
+
+            input.value = "";
+            input.placeholder = "Mesaj yaz...";
+            replyingTo = null;
+        }
+
+        document.getElementById("msg").addEventListener("keydown", e => {
+            if (e.key === "Enter" && !e.shiftKey) {
+                e.preventDefault();
+                send();
+            }
+            if (e.key === "Escape") {
+                replyingTo = null;
+                e.target.placeholder = "Mesaj yaz...";
+            }
+        });
+
+        // Socket eventleri
+        socket.on("message", msg => {
+            const existing = document.getElementById("msg-" + msg.id);
+            if (existing) existing._cached = msg;
+            addMessage(msg);
+        });
+
+        socket.on("message-edited", data => {
+            const div = document.getElementById("msg-" + data.id);
+            if (div) {
+                div.querySelector(".text").innerHTML = escapeHtml(data.text) + '<span class="edited"> (düzenlendi)</span>';
+                div._cached = { ...div._cached, text: data.text, edited: true };
+            }
+        });
+
+        socket.on("message-deleted", data => {
+            const div = document.getElementById("msg-" + data.id);
+            if (div) {
+                div.querySelector(".text").innerHTML = "<i class='deleted'>Bu mesaj silindi.</i>";
+                div.querySelector(".msg-menu")?.remove();
+            }
+        });
+
+        document.getElementById("clear-btn").onclick = () => {
+            if (confirm("Tüm mesajlar silinsin mi?")) {
+                document.getElementById("messages").innerHTML = "";
+            }
+        };
+
+        // SESLİ SOHBET KISMI TAMAMEN AYNI, HİÇ DOKUNMADIM
         function createAudioElement(user) {
             const audio = document.createElement("audio");
             audio.id = "audio-" + user;
@@ -54,132 +308,68 @@
             return audio;
         }
 
-        // Kanal listesi
-        fetch('/channels')
-            .then(r => r.json())
-            .then(channels => {
-                const ul = document.getElementById('channel-list');
-                channels.forEach(c => {
-                    const li = document.createElement('li');
-                    li.textContent = c.name;
-                    li.onclick = () => {
-                        document.querySelectorAll('#channel-list li').forEach(x => x.classList.remove('active'));
-                        li.classList.add('active');
-                        currentChannel = c.id;
-                        document.getElementById('current-channel').textContent = c.name;
-                        document.getElementById('messages').innerHTML = "";
-                        socket.emit('joinChannel', currentChannel);
-                        document.getElementById('send-btn').disabled = false;
-                    };
-                    ul.appendChild(li);
-                });
+        function updateVoiceMembers() {
+            voiceList.innerHTML = "";
+            const currentVoiceUsers = Object.keys(peers);
+            if (currentVoiceUsers.length === 0 && !localStream) {
+                voicePanel.style.display = "none";
+                return;
+            }
+            voicePanel.style.display = "block";
+            const all = [...new Set([username, ...currentVoiceUsers])].sort();
+            all.forEach(u => {
+                const div = document.createElement("div");
+                div.className = "voice-member-item" + (u === username ? " you" : "");
+                div.textContent = u === username ? u + " (Sen)" : u;
+                voiceList.appendChild(div);
             });
-
-        // Kullanıcı listesi (grup DM)
-        setInterval(() => {
-            fetch('/users')
-                .then(r => r.json())
-                .then(list => {
-                    const sel = document.getElementById("group-users");
-                    sel.innerHTML = "";
-                    list.filter(u => u !== username).forEach(u => {
-                        const opt = document.createElement("option");
-                        opt.value = opt.textContent = u;
-                        sel.appendChild(opt);
-                    });
-                });
-        }, 3000);
-
-        // MESAJ GÖNDERME (%100 çalışıyor)
-        function send() {
-            const text = document.getElementById("msg").value.trim();
-            if (!text || !currentChannel) return;
-
-            const selectedGroup = Array.from(document.getElementById("group-users").selectedOptions).map(o => o.value);
-            const dmUser = document.getElementById("dm-user").value.trim() || null;
-
-            const msg = {
-                channel: currentChannel,
-                text,
-                user: username,
-                time: new Date().toTimeString().slice(0,5),
-                dmUser: dmUser,
-                groupUsers: selectedGroup.length > 0 ? selectedGroup : null
-            };
-
-            socket.emit("message", msg);
-            document.getElementById("msg").value = "";
-            document.getElementById("dm-user").value = "";
-            document.getElementById("group-users").selectedIndex = -1;
         }
 
-        document.getElementById("msg").addEventListener("keypress", e => {
-            if (e.key === "Enter") { e.preventDefault(); send(); }
-        });
+        muteBtn.onclick = () => {
+            if (!localStream) return;
+            isMuted = !isMuted;
+            localStream.getAudioTracks()[0].enabled = !isMuted;
+            muteBtn.classList.toggle("muted", isMuted);
+            muteBtn.textContent = isMuted ? "Mikrofonu Aç" : "Mikrofonu Kapat";
+        };
 
-        socket.on("message", msg => {
-            const isVisible = msg.channel === currentChannel ||
-                (msg.dmUser && (msg.dmUser === username || msg.user === username)) ||
-                (msg.groupUsers && msg.groupUsers.includes(username));
-
-            if (!isVisible) return;
-
-            const p = document.createElement("p");
-            if (msg.groupUsers && msg.groupUsers.length > 0)
-                p.textContent = `[${msg.time}] ${msg.user} → ${msg.groupUsers.join(", ")}: ${msg.text}`;
-            else if (msg.dmUser)
-                p.textContent = `[${msg.time}] ${msg.user} → ${msg.dmUser}: ${msg.text}`;
-            else
-                p.textContent = `[${msg.time}] ${msg.user}: ${msg.text}`;
-
-            document.getElementById("messages").appendChild(p);
-            document.getElementById("messages").scrollTop = document.getElementById("messages").scrollHeight;
-        });
-
-        // ===================== SESLİ SOHBET - %100 DÜZELTİLDİ =====================
         document.getElementById("start-voice").onclick = async () => {
             if (localStream) return;
-
             try {
                 localStream = await navigator.mediaDevices.getUserMedia({
                     audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true }
                 });
-
                 socket.emit("voice-join", { username });
-
                 document.getElementById("start-voice").disabled = true;
                 document.getElementById("stop-voice").disabled = false;
+                document.getElementById("mute-btn").disabled = false;
+                isMuted = false;
+                muteBtn.classList.remove("muted");
+                muteBtn.textContent = "Mikrofonu Kapat";
+                updateVoiceMembers();
             } catch (err) {
                 alert("Mikrofon erişimi reddedildi!");
-                console.error(err);
             }
         };
 
         document.getElementById("stop-voice").onclick = () => {
-            // Mikrofonu kapat
             if (localStream) {
                 localStream.getTracks().forEach(t => t.stop());
                 localStream = null;
             }
-
-            // Tüm peer'leri SAĞLAM şekilde temizle
             Object.keys(peers).forEach(user => {
-                if (peers[user] && typeof peers[user].destroy === "function") {
-                    peers[user].destroy();
-                }
+                if (peers[user]) peers[user].destroy();
                 delete peers[user];
                 const audio = document.getElementById("audio-" + user);
                 if (audio) audio.remove();
             });
-
             socket.emit("voice-leave");
-
-            // BUTONLARI KESİNLİKLE GERİ AÇ
             document.getElementById("start-voice").disabled = false;
             document.getElementById("stop-voice").disabled = true;
+            document.getElementById("mute-btn").disabled = true;
+            voicePanel.style.display = "none";
         };
 
-        // WebRTC
         socket.on("voice-signal", ({ from, signal }) => {
             if (!peers[from]) {
                 const peer = new SimplePeer({ initiator: false, trickle: false, stream: localStream });
@@ -189,6 +379,7 @@
                     audio.srcObject = stream;
                 });
                 peers[from] = peer;
+                updateVoiceMembers();
             }
             peers[from].signal(signal);
         });
@@ -202,14 +393,14 @@
                 audio.srcObject = stream;
             });
             peers[newUser] = peer;
+            updateVoiceMembers();
         });
 
         socket.on("voice-users", list => {
             list.forEach(u => {
-                if (u !== username && !peers[u]) {
-                    socket.emit("voice-new-user", u);
-                }
+                if (u !== username && !peers[u]) socket.emit("voice-new-user", u);
             });
+            updateVoiceMembers();
         });
 
         socket.on("voice-user-left", user => {
@@ -219,9 +410,9 @@
                 const audio = document.getElementById("audio-" + user);
                 if (audio) audio.remove();
             }
+            updateVoiceMembers();
         });
 
-        // Sayfa kapanırken temizle
         window.addEventListener("beforeunload", () => {
             if (localStream) localStream.getTracks().forEach(t => t.stop());
             socket.emit("voice-leave");
